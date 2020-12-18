@@ -1,6 +1,8 @@
 # steven-universe
 Playground for analyzing themes in Steven Universe episode transcripts
 
+![Steven Universe](steven_universe_gif.gif)
+
 ## To-do
 - Scrape transcripts from the [Steven Universe Wiki](https://steven-universe.fandom.com/wiki/Category:Transcripts)
 - Analyze most salient tokens and n-grams
