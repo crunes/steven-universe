@@ -1,28 +1,24 @@
 '''
-STEVEN UNIVERSE: Scrape Steven Universe Wiki episode guide and transcripts
+STEVEN UNIVERSE: Scrape Steven Universe Wiki and analyze transcripts
 
 Author: Charmaine Runes
 
-This file crawls through the Steven Universe Wiki, scrapes episode transcripts,
-and stores them in CSV files. (Export to a PostGreSQL database later)
+This file scrapes the Steven Universe Wiki for season data and episode
+transcripts, storing them in CSV files to export into a SQLite database later.
 '''
 
-import queue
-import json
 import sys
+import os
 import csv
 import bs4
-import util
 import re
 import datetime
 
-INDEX_IGNORE = set(['a', 'also', 'an', 'and', 'are', 'as', 'at', 'be',
-                    'but', 'by', 'for', 'from', 'how', 'i', 'in', 'include',
-                    'is', 'not', 'of', 'on', 'or', 's', 'so', 'such', 'that',
-                    'the', 'their', 'this', 'through', 'to', 'we', 'were',
-                    'which', 'will', 'with', 'yet'])
+import util
+import config
 
 LIMITING_DOMAIN = "https://steven-universe.fandom.com"
+DATA_FILEPATH = "/Users/charmainerunes/git/steven-universe/data/"
 
 class Season():
     '''
@@ -38,8 +34,6 @@ class Season():
             - num_episodes (int): Number of episodes in the season
             - start_date (str): Season start date e.g., "December 7, 2019"
             - end_date (str): Season end date e.g., "March 27, 2020"
-            - first_ep_url (str): URL to the season's first episode
-            - last_ep_url (str): URL to the season's last episode
             - episodes (list): List of Episodes
         '''
         self.name = name
@@ -47,8 +41,6 @@ class Season():
         self.num_episodes = None
         self.start_date = None
         self.end_date = None
-        self.first_ep_url = None
-        self.last_ep_url = None
         self.episodes = []
 
     def __repr__(self):
@@ -77,15 +69,16 @@ class Episode():
             - num_series (int): The episode number in the series
             - num_season (int): The episode number in the season
             - airdate (str): Date the episode first aired
-            - description (str): Brief episode summary
+            - summary (str): Brief episode summary
             - transcript (list): List of dictionaries
         '''
         self.title = title
 
+        self.season = None
         self.num_series = None
         self.num_season = None
         self.airdate = None
-        self.description = None
+        self.summary = None
         self.transcript = []
 
     def __repr__(self):
@@ -93,8 +86,8 @@ class Episode():
         Returns a representation of the Episode
         '''
         repr_name = self.title
-
-        # Change this to add to a description for later
+        if self.summary:
+            repr_name += (':\n'+ self.summary)
 
         return repr(repr_name)
 
@@ -147,7 +140,7 @@ def extract_transcript(url, episode):
     soup = download_convert_webpage(url)
 
     find_title = soup.find('h1', id="firstHeading")
-    print(find_title)
+    #print(find_title)
 
     if not find_title:
         print("Could not find title. This shouldn't happen.")
@@ -166,19 +159,25 @@ def extract_transcript(url, episode):
 
     table = soup.find('table', class_ = 'wikitable bgrevo')
     rows = table.find_all('tr')
-    print("Number of rows:", len(rows))
+    #print("Number of rows:", len(rows))
 
     for row in rows[1:]:
         # Skip the first row; it will always be Speaker and Dialogue
-        content = {}
         speaker = row.find('th')
         data = row.find('td')
 
         if not data:
-            print("Could not find data")
+            #print("Could not find data")
             continue
 
         data = data.text.strip() # To remove the '\n'
+
+        content = {"episode": episode.title, # Connect transcript to episode
+                   "speaker": None,
+                   "actions": [],
+                   "quote": None,
+                   "location": None,
+                   "description": None}
 
         if speaker:
             content['speaker'] = speaker.text.strip() # To remove the '\n'
@@ -259,10 +258,6 @@ def get_season_data(soup):
             season.start_date = convert_string_to_datetime(airdate_str)
             season.end_date = season.start_date
 
-            season.first_ep_url = data[2].contents[1].find('a').get('href')
-            #print(season.first_ep_url)
-            season.last_ep_url = season.first_ep_url
-
         else:
             season.num_episodes = int(data[2].contents[0].strip())
 
@@ -271,9 +266,6 @@ def get_season_data(soup):
 
             end_date_str = data[4].contents[0].strip()
             season.end_date = convert_string_to_datetime(end_date_str)
-
-            season.first_ep_url = data[3].contents[1].find('a').get('href')
-            season.last_ep_url = data[4].contents[1].find('a').get('href')
 
         list_of_seasons.append(season)
 
@@ -308,7 +300,7 @@ def get_episode_data(soup, all_seasons):
                     current_ep.num_series = data[0].text.strip()
                     current_ep.num_season = data[1].text.strip()
                     #current_ep.airdate = convert_string_to_datetime(data[4].text.strip())
-                    current_ep.description = data[6].text.strip()
+                    current_ep.summary = data[6].text.strip()
 
                     ep_url = data[3].find('a').get('href')
 
@@ -321,11 +313,11 @@ def get_episode_data(soup, all_seasons):
                     data = movie_table.find_all('td')
 
                     ep_title = data[1].text.strip()
-                    print(data[1])
+                    #print(data[1])
                     current_ep = Episode(ep_title)
 
-                    current_ep.description = data[2].text.strip()
-                    print(current_ep.description)
+                    current_ep.summary = data[4].text.strip()
+                    print(current_ep.summary)
 
                     ep_url = data[1].find('a').get('href')
 
@@ -335,6 +327,7 @@ def get_episode_data(soup, all_seasons):
                 extract_transcript(ep_url_to_visit, current_ep)
                 print("Got transcript for " + current_ep.title)
 
+                current_ep.season = current_season.name # Connect episode to season
                 current_season.episodes.append(current_ep)
 
             else:
@@ -342,15 +335,64 @@ def get_episode_data(soup, all_seasons):
 
     return all_seasons
 
+def ensure_dict(object):
+    '''
+    Make sure the object is of dictionary type
+    '''
+
+    if isinstance(object, dict):
+        return object
+    else:
+        return object.__dict__
+
+def write_rows(csvfile, list_of_dict, final_cols):
+    '''
+    Writes each dictionary into a CSV's row
+    '''
+    writer = csv.DictWriter(csvfile, fieldnames=final_cols)
+
+    for d in list_of_dict:
+        to_parse = ensure_dict(d)
+        filtered_d = dict(
+            (k, v) for k, v in to_parse.items() if k in final_cols
+        )
+        writer.writerow(filtered_d)
+
+    return None
+
+
+def convert_to_csv(list_of_dict, file_name):
+    '''
+    Takes a list of pseudo-dictionaries and returns a CSV with a given filename
+    '''
+    skip_cols = ['episodes', 'transcript']
+    def_a_dict = ensure_dict(list_of_dict[0])
+
+    # Assumes that every pseudo-dictionary has the same keys
+    final_cols = [col for col in def_a_dict.keys() if col not in skip_cols]
+
+    if not os.path.isfile(file_name):
+        with open(file_name, 'w') as csvfile:
+            write_rows(csvfile, list_of_dict, final_cols)
+
+    else:
+        with open(file_name, 'a') as csvfile:
+            write_rows(csvfile, list_of_dict, final_cols)
+
+    return None
+
 
 # Crawl through wiki pages
-def scrape_wiki():
+def main():
     '''
     Scrape wiki data, starting with the first episode of the first season,
-    and creates Episode objects. Each Episode is appended to the Season's list
-    of episodes.
+    and creates Episode objects. Each Episode is then appended to the Season's
+    list of episodes.
     '''
     starting_url = "https://steven-universe.fandom.com/wiki/Episode_Guide"
+    season_csv = config.data_folder + 'seasons.csv'
+    episode_csv = config.data_folder + 'episodes.csv'
+    transcripts_csv = config.data_folder + 'transcripts.csv'
 
     soup = download_convert_webpage(starting_url)
 
@@ -360,30 +402,23 @@ def scrape_wiki():
     seasons_with_episodes = get_episode_data(soup, all_seasons)
     print("Got episodes!")
 
+    # Create seasons.csv
+    print("Creating seasons.csv...")
+    convert_to_csv(seasons_with_episodes, season_csv)
+
+    for season in seasons_with_episodes:
+        print("Adding episodes from", season.name, "to episodes.csv")
+        # Build out episodes.csv
+        convert_to_csv(season.episodes, episode_csv)
+
+        # Build out transcripts.csv
+        for episode in season.episodes:
+            print("Adding transcript from", episode.title, "to transcripts.csv")
+            convert_to_csv(episode.transcript, transcripts_csv)
+
     return None
 
 
 if __name__ == "__main__":
     usage = "python3 scrape_wiki.py"
-    args_len = len(sys.argv)
-
-    if args_len == 1:
-        num_pages_to_crawl = 200 # Max number of pages is 181
-    elif args_len == 2:
-        try:
-            num_pages_to_crawl = int(sys.argv[1])
-        except ValueError:
-            print(usage)
-            sys.exit(0)
-    else:
-        print(usage)
-        sys.exit(0)
-
-    crawl_wiki()
-
-
-
-
-
-
-# Get requests
+    main()
