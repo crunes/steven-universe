@@ -345,11 +345,14 @@ def ensure_dict(object):
     else:
         return object.__dict__
 
-def write_rows(csvfile, list_of_dict, final_cols):
+def write_rows(csvfile, list_of_dict, final_cols, header=False):
     '''
     Writes each dictionary into a CSV's row
     '''
     writer = csv.DictWriter(csvfile, fieldnames=final_cols)
+
+    if header:
+        writer.writeheader()
 
     for d in list_of_dict:
         to_parse = ensure_dict(d)
@@ -373,7 +376,7 @@ def convert_to_csv(list_of_dict, file_name):
 
     if not os.path.isfile(file_name):
         with open(file_name, 'w') as csvfile:
-            write_rows(csvfile, list_of_dict, final_cols)
+            write_rows(csvfile, list_of_dict, final_cols, header=True)
 
     else:
         with open(file_name, 'a') as csvfile:
